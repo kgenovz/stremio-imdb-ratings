@@ -4,11 +4,11 @@ const https = require('https');
 // Add-on manifest
 const manifest = {
     id: 'imdb.episode.ratings.streams',
-    version: '1.0.0',
-    name: 'IMDb Episode Ratings',
-    description: 'Shows IMDb ratings for TV show episodes as informational streams',
+    version: '1.1.0',
+    name: 'IMDb Ratings',
+    description: 'Shows IMDb ratings for movies and TV show episodes as informational streams',
     resources: ['stream'],
-    types: ['series'],
+    types: ['movie', 'series'], // Added movie support
     catalogs: [],
     idPrefixes: ['tt'] // IMDb ID prefix
 };
@@ -32,7 +32,31 @@ function makeRequest(url) {
     });
 }
 
-// Get IMDb rating for a specific episode
+// Get IMDb rating for a movie
+async function getMovieRating(imdbId) {
+    try {
+        const apiKey = process.env.OMDB_API_KEY || '4dd7471d';
+        const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
+        
+        console.log(`🎬 Fetching movie rating:`, url);
+        const data = await makeRequest(url);
+        console.log('📊 OMDb response:', data);
+        
+        if (data && data.imdbRating && data.imdbRating !== 'N/A') {
+            return {
+                rating: data.imdbRating,
+                votes: data.imdbVotes || '',
+                title: data.Title || '',
+                plot: data.Plot || ''
+            };
+        }
+        console.log('⚠️ No rating found in response');
+        return null;
+    } catch (error) {
+        console.error('💥 Error fetching movie rating:', error);
+        return null;
+    }
+}
 async function getEpisodeRating(imdbId, season, episode) {
     try {
         const apiKey = process.env.OMDB_API_KEY || '4dd7471d';
@@ -61,7 +85,7 @@ async function getEpisodeRating(imdbId, season, episode) {
 // Get series episodes with ratings
 async function getSeriesEpisodes(seriesImdbId, season) {
     try {
-        const apiKey = process.env.OMDB_API_KEY || 'YOUR_API_KEY_HERE';
+        const apiKey = process.env.OMDB_API_KEY || '4dd7471d';
         const url = `https://www.omdbapi.com/?i=${seriesImdbId}&Season=${season}&apikey=${apiKey}`;
         
         console.log('🔗 Fetching series episodes:', url);
@@ -92,62 +116,78 @@ builder.defineStreamHandler(async (args) => {
         console.log('🎬 Stream request received:', args);
         const { type, id } = args;
         
-        if (type !== 'series') {
+        if (type !== 'series' && type !== 'movie') {
             return { streams: [] };
         }
-        
-        // Parse the ID to extract IMDb ID, season, and episode
-        // Expected format: tt1234567:1:1 (imdbId:season:episode)
-        const [imdbId, season, episode] = id.split(':');
-        
-        if (!imdbId || !season || !episode) {
-            console.log('❌ Invalid ID format:', id);
-            return { streams: [] };
-        }
-        
-        console.log(`📺 Processing episode ${season}x${episode} for series ${imdbId}`);
-        
-        // Get rating for this specific episode
-        const ratingData = await getEpisodeRating(imdbId, season, episode);
         
         const streams = [];
         
-        if (ratingData) {
-            // Create informational stream using the working format from ratings aggregator
-            const votesText = ratingData.votes ? ` (${ratingData.votes} votes)` : '';
+        if (type === 'movie') {
+            // Handle movie ratings
+            console.log(`🎥 Processing movie: ${id}`);
             
-            // Clean format - just the rating info
-            const formattedLines = [
-                "───────────────",
-                `⭐ IMDb        : ${ratingData.rating}/10${votesText}`,
-                "───────────────"
-            ];
+            const ratingData = await getMovieRating(id);
             
-            const stream = {
-                name: "📊 IMDb Rating",
-                description: formattedLines.join('\n'),
-                externalUrl: `https://www.imdb.com/title/${imdbId}/`,
-                behaviorHints: {
-                    notWebReady: true,
-                    bingeGroup: `ratings-${id}`
-                },
-                type: "other"
-            };
-            
-            streams.push(stream);
-            console.log(`✅ Added rating stream: ${stream.name}`);
-        } else {
-            // Try to get rating from series season data as fallback
-            console.log('🔄 Trying season-based lookup as fallback...');
-            const episodeList = await getSeriesEpisodes(imdbId, season);
-            const episodeData = episodeList.find(ep => ep.episode === parseInt(episode));
-            
-            if (episodeData && episodeData.rating) {
-                const votesText = episodeData.votes ? ` (${episodeData.votes} votes)` : '';
+            if (ratingData) {
+                const votesText = ratingData.votes ? ` (${ratingData.votes} votes)` : '';
                 
                 const formattedLines = [
                     "───────────────",
-                    `⭐ IMDb        : ${episodeData.rating}/10${votesText}`,
+                    `⭐ IMDb        : ${ratingData.rating}/10${votesText}`,
+                    "───────────────"
+                ];
+                
+                const stream = {
+                    name: "📊 IMDb Rating",
+                    description: formattedLines.join('\n'),
+                    externalUrl: `https://www.imdb.com/title/${id}/`,
+                    behaviorHints: {
+                        notWebReady: true,
+                        bingeGroup: `ratings-${id}`
+                    },
+                    type: "other"
+                };
+                
+                streams.push(stream);
+                console.log(`✅ Added movie rating stream: ${stream.name}`);
+            } else {
+                // No rating available for movie
+                streams.push({
+                    name: "📊 IMDb Rating",
+                    description: "───────────────\n⭐ IMDb Rating: Not Available\n───────────────",
+                    externalUrl: `https://www.imdb.com/title/${id}/`,
+                    behaviorHints: {
+                        notWebReady: true,
+                        bingeGroup: `ratings-${id}`
+                    },
+                    type: "other"
+                });
+                console.log('❌ Added "no rating" stream for movie');
+            }
+        } else if (type === 'series') {
+            // Handle series episode ratings (existing logic)
+            // Parse the ID to extract IMDb ID, season, and episode
+            // Expected format: tt1234567:1:1 (imdbId:season:episode)
+            const [imdbId, season, episode] = id.split(':');
+            
+            if (!imdbId || !season || !episode) {
+                console.log('❌ Invalid series ID format:', id);
+                return { streams: [] };
+            }
+            
+            console.log(`📺 Processing episode ${season}x${episode} for series ${imdbId}`);
+            
+            // Get rating for this specific episode
+            const ratingData = await getEpisodeRating(imdbId, season, episode);
+            
+            if (ratingData) {
+                // Create informational stream using the working format from ratings aggregator
+                const votesText = ratingData.votes ? ` (${ratingData.votes} votes)` : '';
+                
+                // Clean format - just the rating info
+                const formattedLines = [
+                    "───────────────",
+                    `⭐ IMDb        : ${ratingData.rating}/10${votesText}`,
                     "───────────────"
                 ];
                 
@@ -163,20 +203,49 @@ builder.defineStreamHandler(async (args) => {
                 };
                 
                 streams.push(stream);
-                console.log(`✅ Added rating stream (fallback): ${stream.name}`);
+                console.log(`✅ Added rating stream: ${stream.name}`);
             } else {
-                // No rating available
-                streams.push({
-                    name: "📊 IMDb Rating",
-                    description: "───────────────\n⭐ IMDb Rating: Not Available\n───────────────",
-                    externalUrl: `https://www.imdb.com/title/${imdbId}/`,
-                    behaviorHints: {
-                        notWebReady: true,
-                        bingeGroup: `ratings-${id}`
-                    },
-                    type: "other"
-                });
-                console.log('❌ Added "no rating" stream');
+                // Try to get rating from series season data as fallback
+                console.log('🔄 Trying season-based lookup as fallback...');
+                const episodeList = await getSeriesEpisodes(imdbId, season);
+                const episodeData = episodeList.find(ep => ep.episode === parseInt(episode));
+                
+                if (episodeData && episodeData.rating) {
+                    const votesText = episodeData.votes ? ` (${episodeData.votes} votes)` : '';
+                    
+                    const formattedLines = [
+                        "───────────────",
+                        `⭐ IMDb        : ${episodeData.rating}/10${votesText}`,
+                        "───────────────"
+                    ];
+                    
+                    const stream = {
+                        name: "📊 IMDb Rating",
+                        description: formattedLines.join('\n'),
+                        externalUrl: `https://www.imdb.com/title/${imdbId}/`,
+                        behaviorHints: {
+                            notWebReady: true,
+                            bingeGroup: `ratings-${id}`
+                        },
+                        type: "other"
+                    };
+                    
+                    streams.push(stream);
+                    console.log(`✅ Added rating stream (fallback): ${stream.name}`);
+                } else {
+                    // No rating available
+                    streams.push({
+                        name: "📊 IMDb Rating",
+                        description: "───────────────\n⭐ IMDb Rating: Not Available\n───────────────",
+                        externalUrl: `https://www.imdb.com/title/${imdbId}/`,
+                        behaviorHints: {
+                            notWebReady: true,
+                            bingeGroup: `ratings-${id}`
+                        },
+                        type: "other"
+                    });
+                    console.log('❌ Added "no rating" stream');
+                }
             }
         }
         
